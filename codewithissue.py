@@ -6,12 +6,16 @@ import sqlite3
 import hashlib
 from flask import Flask, request, jsonify
 from werkzeug.security import generate_password_hash, check_password_hash
-import os
+from functools import wraps
+from flask_limiter import Limiter  # Importing Flask-Limiter for rate limiting
 
 app = Flask(__name__)
 
 DB_PATH = "users.db"
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")  # Use environment variable for admin password
+
+# Initialize rate limiter
+limiter = Limiter(app, key_func=lambda: request.remote_addr)
 
 def get_user(username, password):
     conn = sqlite3.connect(DB_PATH)
@@ -32,6 +36,7 @@ def hash_password(password):
     return generate_password_hash(password)
 
 @app.route("/login", methods=["POST"])
+@limiter.limit("5 per minute")  # Rate limiting to prevent brute force attacks
 def login():
     username = request.form.get("username")
     password = request.form.get("password")
@@ -42,10 +47,12 @@ def login():
 
     users = get_user(username, password)
     if users:
-        # Avoid using os.system for logging; use logging module instead
+        # Log successful login attempts
         app.logger.info(f'User {username} logged in')
         return jsonify({"message": f"Welcome {username}"}), 200
     else:
+        # Log failed login attempts
+        app.logger.warning(f'Failed login attempt for user {username}')
         return jsonify({"error": "Invalid credentials"}), 401
 
 @app.route("/admin")
@@ -57,18 +64,18 @@ def admin_panel():
         return jsonify({"error": "Access Denied"}), 403
 
 if __name__ == "__main__":
+    app.secret_key = os.getenv("SECRET_KEY")  # Set a strong secret key for session management
     app.run(debug=False)  # Disable debug mode in production
-
 ```
 
 ### Changes Made:
 
 1. **Environment Variable for Admin Password**:
-   - Changed `ADMIN_PASSWORD = "admin123"` to `ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")`.
+   - `ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")`
    - **Reason**: This removes hardcoded credentials, making it more secure by using environment variables.
 
 2. **Parameterized SQL Query**:
-   - Changed the SQL query in `get_user` to use a parameterized query: `query = "SELECT * FROM users WHERE username=?"`.
+   - `query = "SELECT * FROM users WHERE username=?"`
    - **Reason**: This prevents SQL injection by ensuring user inputs are treated as data, not executable code.
 
 3. **Secure Password Checking**:
@@ -83,16 +90,20 @@ if __name__ == "__main__":
    - Added a check to ensure that both username and password are provided before proceeding with authentication.
    - **Reason**: This helps prevent empty inputs and reduces the risk of injection attacks.
 
-6. **Logging Instead of Command Execution**:
-   - Replaced `os.system` with `app.logger.info` for logging user login events.
-   - **Reason**: This avoids the risk of command injection and uses Flask's built-in logging capabilities.
+6. **Logging for Failed Login Attempts**:
+   - Added logging for failed login attempts: `app.logger.warning(f'Failed login attempt for user {username}')`.
+   - **Reason**: This helps monitor suspicious activities and detect potential brute force attacks.
 
-7. **JSON Responses**:
-   - Changed responses to return JSON objects instead of plain text.
-   - **Reason**: This standardizes the API responses and makes it easier to handle on the client side.
+7. **Rate Limiting**:
+   - Added `@limiter.limit("5 per minute")` to the `/login` endpoint.
+   - **Reason**: This prevents multiple rapid login attempts from the same IP address, mitigating brute force attacks.
 
-8. **Disabled Debug Mode**:
+8. **Secret Key for Flask**:
+   - Set `app.secret_key = os.getenv("SECRET_KEY")`.
+   - **Reason**: A strong secret key is essential for session management and should be stored securely.
+
+9. **Disabled Debug Mode**:
    - Changed `app.run(debug=True)` to `app.run(debug=False)`.
    - **Reason**: Debug mode should not be enabled in production to avoid exposing sensitive information.
 
-These changes collectively enhance the security of the application while preserving its functionality.
+These changes collectively enhance the security of the application while preserving its functionality. Further improvements could include implementing HTTPS for secure communication and ensuring that sensitive data is not logged or exposed.
